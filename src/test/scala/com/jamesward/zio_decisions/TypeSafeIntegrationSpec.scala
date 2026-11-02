@@ -19,7 +19,7 @@ object TypeSafeIntegrationSpec extends ZIOSpecDefault:
   def spec = suite("TypeSafe (Jev), live")(
     SharedSpec.happyPathScenarios.map(asTest)*
   ).provideSomeShared[Scope](Client.default, TypeSafe.live)
-    @@ ifEnvSet("TYPESAFE_API_KEY")
+    @@ ifEnv("TYPESAFE_API_KEY")(_.trim.nonEmpty)
     @@ withLiveClock
     @@ withLiveSystem
     @@ timeout(60.seconds)

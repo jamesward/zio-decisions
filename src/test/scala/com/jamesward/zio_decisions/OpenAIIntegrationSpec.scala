@@ -83,4 +83,4 @@ object OpenAIIntegrationSpec extends ZIOSpecDefault:
         .map(exit => assertTrue(exit.causeOption.flatMap(_.failureOption).exists(e =>
           e.isInstanceOf[Error.Authentication] && !Error.isTransient(e))))
     }.provide(Client.default),
-  ) @@ ifEnvSet("OPENAI_API_KEY") @@ withLiveClock @@ withLiveSystem @@ timeout(3.minutes) @@ sequential
+  ) @@ ifEnv("OPENAI_API_KEY")(_.trim.nonEmpty) @@ withLiveClock @@ withLiveSystem @@ timeout(3.minutes) @@ sequential
