@@ -1,13 +1,14 @@
-# Jev loop architecture
+# Decision loop architecture
 
-`TypeSafeAI.loop` turns Jev — a System One model that only answers typed,
+`Decisions.loop` turns a decision model — a System One model (TypeSafe AI's
+Jev, OpenAI's Decisions API, any `DecisionModel`) that only answers typed,
 atomic questions — into the outer decision loop of an application state
-machine. Jev never generates an action; on every iteration the host
-generates the *entire* finite set of legal actions and Jev answers one
+machine. The model never generates an action; on every iteration the host
+generates the *entire* finite set of legal actions and the model answers one
 `Question.Choice`: "which of these advances the state?"
 
 That inversion is the whole design. The host owns the state type `S`, the
-action type `A`, effects, and termination; Jev owns exactly one decision per
+action type `A`, effects, and termination; the model owns exactly one decision per
 turn, and that decision is a calibrated probability distribution over ids the
 host minted itself.
 
@@ -22,19 +23,22 @@ flowchart TB
         H["handler: (S, A) => ZIO[R, E, LoopStep[S, O]]"]
     end
 
-    subgraph pub["TypeSafeAI (public API)"]
+    subgraph pub["Decisions (public API)"]
         LR["LoopRequest[S, A, R, E, O]<br/>.model / .maxIterations / .run"]
     end
 
     subgraph internal["internal (never imported by users)"]
         LI["LoopImpl.run<br/>recursive step/6"]
-        DSR["DynamicSystemOneRequest<br/>one question: next_action"]
+        DSR["DynamicAskRequest<br/>one question: next_action"]
         RI["RequestImpl.runDynamic"]
-        HP["Helpers.toWireRequest<br/>fromWireDynamicAnswer"]
-        HTTP["Http.HttpClient.send"]
     end
 
-    JEV["api.typesafe.ai<br/>POST /v1/systemone"]
+    subgraph provider["the environment's DecisionModel"]
+        HP["decide(Request)<br/>TypeSafe or OpenAI wire mapping"]
+        HTTP["HTTP transport"]
+    end
+
+    JEV["api.typesafe.ai /v1/systemone<br/>or api.openai.com /v1/decisions"]
 
     S --> LR
     SV --> LR
@@ -46,15 +50,16 @@ flowchart TB
     RI --> HP
     HP --> HTTP
     HTTP -->|"bearer auth, JSON"| JEV
-    JEV -->|"Answer.Choice"| HTTP
-    HTTP --> RI
+    JEV -->|"choice answer"| HTTP
+    HTTP --> HP
+    HP -->|"Decision"| RI
     RI -->|"DynamicAnswer.Choice"| LI
     LI -->|"option.value: A"| H
     H -->|"LoopStep.Continue / Done"| LI
     LI -->|"LoopResult[O]"| LR
 ```
 
-`LoopImpl` reaches Jev through `DynamicSystemOneRequest`, not the typed
+`LoopImpl` reaches the model through `DynamicAskRequest`, not the typed
 `ask` path. It has to: the option set is built at runtime, so there is no
 compile-time `NamedTuple` to key the answer by. The loop pays for that with a
 runtime map lookup on the fixed id `next_action` and an explicit variant
@@ -67,7 +72,7 @@ sequenceDiagram
     participant L as LoopImpl.step
     participant O as options(state)
     participant C as ChoiceCriteria
-    participant J as Jev
+    participant J as decision model
     participant H as handler(state, action)
 
     L->>O: generate legal actions for this state
@@ -89,10 +94,10 @@ The loop request sends the serialized `Content` state view, model and question
 metadata, configurable choice instructions, and each option's id and
 *description*. `LoopOption` keeps `id`, `value: A`, and `description: Content`
 separate precisely so the host's real action value never has to be serializable
-or cross the wire — Jev sees the id/description pair, and the host maps the
+or cross the wire — the model sees the id/description pair, and the host maps the
 selected id back to `A`.
 
-Option ids are opaque to Jev by construction. The question text says so
+Option ids are opaque to the model by construction. The question text says so
 ("Option ids are opaque; judge their structured descriptions"), which keeps
 a terse id like `finish` from doing semantic work the description should be
 doing.
@@ -114,14 +119,14 @@ flowchart TD
     VALID -->|no| E3["Error.InvalidLoop"]
     VALID --> CRIT{"ChoiceCriteria<br/>1-255 options?"}
     CRIT -->|no| E3
-    CRIT --> ASK["ask Jev: next_action"]
+    CRIT --> ASK["ask the model: next_action"]
 
     ASK -->|"HTTP / decode failure"| E4["Error.BadRequest, RateLimit,<br/>Transport, ..."]
     ASK --> ANS{"answer for next_action?"}
     ANS -->|missing| E5["Error.MissingAnswer"]
     ANS -->|"wrong variant"| E3
     ANS --> RESOLVE{"choice matches<br/>a known option id?"}
-    RESOLVE -->|no| E6["Error.InvalidLoop<br/>Jev selected unknown option"]
+    RESOLVE -->|no| E6["Error.InvalidLoop<br/>the decision model selected unknown option"]
     RESOLVE --> HANDLE["handler(state, action)"]
 
     HANDLE -->|"fails with E"| EH
@@ -136,7 +141,7 @@ Every validation gate runs *per iteration*, not once at build time, because
 duplicate id only in some late state fails there, before anything is sent.
 
 The error channel is the union `Error | E`, and the environment is
-`Client & R`. Host failures pass through unwidened: a loop over a database
+`DecisionModel & R`. Host failures pass through unwidened: a loop over a database
 never has to wrap its own errors in a library error type, and `E = Nothing`
 (as in the counter example) collapses the union back to `Error`.
 
@@ -149,21 +154,21 @@ flowchart LR
     R --> O["output: O"]
     R --> TS["turns: List[LoopTurn]"]
     R --> U["usage: Usage<br/>summed input/output tokens"]
-    R --> L["latencyMs: Long<br/>sum of per-turn Jev latency"]
+    R --> L["latencyMs: Long<br/>sum of per-turn decision latency"]
 ```
 
 `LoopTurn` records the *full* `ChoiceAnswer`, not just the selected id — the
-probability distribution over every option and Jev's confidence are kept for
+probability distribution over every option and the model's confidence are kept for
 each decision, which is what makes a loop auditable after the fact ("it chose
 `escalate`, but `retry` was at 0.46").
 
 Two things the aggregates deliberately do not include:
 
-- **`latencyMs` is Jev time only.** It is measured around the HTTP call and
+- **`latencyMs` is decision time only.** It is measured around the HTTP call and
   summed across turns, so it excludes whatever the handler spent doing real
   work. It answers "how much of this loop was the model?", not "how long did
   this loop take".
-- **`usage` is Jev tokens only.** A handler that calls a generative model
+- **`usage` is decision tokens only.** A handler that calls a generative model
   reports its own usage through its own channel.
 
 The turn is recorded *before* the handler runs, so a handler that fails still
@@ -174,12 +179,12 @@ and inspected upstream.
 
 `handler` returns `ZIO[R, E, LoopStep[S, O]]`, so an action can do anything a
 ZIO can do — an MCP call, a database write, a generative model call with no
-tools — while Jev stays the outer loop. This is the opposite of tool-calling:
+tools — while the model stays the outer loop. This is the opposite of tool-calling:
 instead of a generative model emitting a tool name it might hallucinate, a
 System One model picks from a set that the host proved legal for this exact
 state, and the picked value is already the typed `A` the handler expects.
 
-`Error.InvalidLoop("Jev selected unknown option ...")` is therefore a
+`Error.InvalidLoop("the decision model selected unknown option ...")` is therefore a
 protocol violation, not a normal outcome — it can only fire if the model
 returns an id outside the criteria it was given.
 
@@ -195,14 +200,14 @@ A `LoopObserver[E, O]` receives semantic events rather than transport attempts. 
 
 1. generate and validate the complete option set;
 2. emit `LoopObservation.OptionsGenerated` with the `Content` state view and id/description metadata;
-3. run Jev (including any configured physical retries);
+3. run the model (including any configured physical retries);
 4. resolve the selected id and emit `LoopObservation.Decision`;
 5. invoke the existing turn-aware handler;
 6. recurse or emit `LoopObservation.Completion`.
 
 The outermost execution boundary alone emits `LoopObservation.Failure`, so recursive failure propagation cannot duplicate notifications. Its `Cause[Error | E]` preserves typed failures, defects, and interruption for unconstrained host `E`, and its turn list includes every successfully resolved decision, including one whose handler subsequently failed. All observer callbacks are best-effort: callback defects and self-interruption are safely logged and suppressed without replacing the loop result or cause.
 
-`LoopRetryPolicy` wraps only `DynamicSystemOneRequest.run` for the current turn. `RateLimit`, `ServiceOverloaded`, and `InternalServer` are retried up to `maxRetries`; no other error is. Options, state rendering, semantic observers, handler effects, and recursion sit outside that boundary and therefore execute once per logical turn. A turn's `latencyMs` includes every physical attempt and exponential-backoff wait. Its `usage` is the successful response's reported usage; failed HTTP responses have no usage payload to aggregate. `ExchangeObserver`, when installed on the client, still sees every physical attempt.
+`LoopRetryPolicy` wraps only `DynamicAskRequest.run` for the current turn. `RateLimit`, `ServiceOverloaded`, and `InternalServer` are retried up to `maxRetries`; no other error is. Options, state rendering, semantic observers, handler effects, and recursion sit outside that boundary and therefore execute once per logical turn. A turn's `latencyMs` includes every physical attempt and exponential-backoff wait. Its `usage` is the successful response's reported usage; failed responses have no usage payload to aggregate. `ExchangeObserver`, when installed on the decision model (`DecisionModel.observed`), still sees every physical attempt.
 
 `choiceInstructions` stores a `Content` value. The historical sentence remains the default (and preserves the exact default request shape), while a custom `Schema` value retains its JSON string/object/array/null structure.
 

@@ -1,8 +1,8 @@
 organization := "com.jamesward"
 
-name := "zio-typesafe-ai"
+name := "zio-decisions"
 
-scalaVersion := "3.10.0"
+scalaVersion := "3.9.0"
 
 scalacOptions ++= Seq(
   // "-Yexplicit-nulls", // not sure where it went
@@ -12,7 +12,7 @@ scalacOptions ++= Seq(
   // "-Xfatal-warnings", // not sure where it went
 )
 
-val zioVersion = "2.1.26"
+val zioVersion = "2.1.27"
 
 val zioSchemaVersion = "1.9.0"
 
@@ -22,7 +22,7 @@ libraryDependencies ++= Seq(
   "dev.zio" %% "zio-http"               % "3.11.6",
   "dev.zio" %% "zio-schema-derivation"  % zioSchemaVersion,
   "dev.zio" %% "zio-schema-json"        % zioSchemaVersion,
-  "dev.zio" %% "zio-json"               % "1.1.0",
+  "dev.zio" %% "zio-json"               % "1.1.1",
 
   "dev.zio" %% "zio-test"           % zioVersion % Test,
   "dev.zio" %% "zio-test-sbt"       % zioVersion % Test,
@@ -43,9 +43,16 @@ javaOptions ++= Seq(
 // validation should execute every suite, including live tests gated by env vars.
 Test / test := (Test / testFull).value
 
+// sbt-dotenv: the forked test JVM gets `.env`'s variables (OPENAI_API_KEY, TYPESAFE_API_KEY), so the live
+// integration specs run locally; `.env` is gitignored, and CI sets the same variables as secrets.
+Test / envFileName := ".env"
+Test / envVars := (Test / envFromFile).value
+
 licenses := Seq("MIT License" -> uri("https://opensource.org/licenses/MIT"))
 
-homepage := Some(uri("https://github.com/jamesward/zio-typesafe-ai"))
+homepage := Some(uri("https://github.com/jamesward/zio-decisions"))
+
+scmInfo := Some(ScmInfo(uri("https://github.com/jamesward/zio-decisions"), "scm:git:git@github.com:jamesward/zio-decisions.git"))
 
 developers := List(
   Developer(
@@ -61,4 +68,4 @@ ThisBuild / versionScheme := Some("semver-spec")
 // SkillsJars: extract agent Skills with `./sbta extractSkillsJars`
 skillsJarsOutputDir := Some(file(".kiro/skills"))
 
-libraryDependencies += "com.jamesward" % "skills" % "0.0.12" % Skills
+libraryDependencies += "com.jamesward" % "skills" % "0.0.21" % Skills

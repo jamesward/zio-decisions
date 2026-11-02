@@ -1,2 +1,4 @@
 -J--enable-native-access=ALL-UNNAMED
 -J--sun-misc-unsafe-memory-access=allow
+-J--add-opens=java.base/java.lang=ALL-UNNAMED
+-J--add-opens=java.base/java.util=ALL-UNNAMED

@@ -13,10 +13,14 @@ jobs:
     steps:
     - uses: actions/checkout@v7
 
-    - uses: actions/setup-java@v6
+    - uses: actions/setup-java@v6.1.0
       with:
         distribution: 'temurin'
         java-version: 25
         cache: 'sbt'
 
     - run: ./sbta test
+      env:
+        # the live integration specs run when these are set, and are skipped when not (fork pull requests)
+        TYPESAFE_API_KEY: ${{ secrets.TYPESAFE_API_KEY }}
+        OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
